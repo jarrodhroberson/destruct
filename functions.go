@@ -28,51 +28,56 @@ func includeFieldPredicate(f reflect.StructField) bool {
 	return true
 }
 
-func primitiveStrategy(h io.Writer, rv reflect.Value) ([]byte, bool) {
+func primitiveStrategy(h io.Writer, rv reflect.Value) bool {
 	switch rv.Kind() {
 	case reflect.String:
-		return []byte(rv.String()), true
+		h.Write([]byte(rv.String()))
+		return true
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		var b bytes.Buffer
 		_ = binary.Write(&b, binary.BigEndian, rv.Int())
-		return b.Bytes(), true
+		h.Write(b.Bytes())
+		return true
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		var b bytes.Buffer
 		_ = binary.Write(&b, binary.BigEndian, rv.Uint())
-		return b.Bytes(), true
+		h.Write(b.Bytes())
+		return true
 	case reflect.Float32, reflect.Float64:
 		var b bytes.Buffer
 		_ = binary.Write(&b, binary.BigEndian, rv.Float())
-		return b.Bytes(), true
+		h.Write(b.Bytes())
+		return true
 	case reflect.Bool:
 		var b bytes.Buffer
 		_ = binary.Write(&b, binary.BigEndian, rv.Bool())
-		return b.Bytes(), true
+		h.Write(b.Bytes())
+		return true
 	default:
-		return nil, false
+		return false
 	}
 }
 
-func pointerStrategy(h io.Writer, rv reflect.Value) ([]byte, bool) {
+func pointerStrategy(h io.Writer, rv reflect.Value) bool {
 	if rv.Kind() == reflect.Ptr {
 		if !rv.IsNil() || rv.Type().Elem().Kind() == reflect.Struct {
 			return structStrategy(h, rv)
 		} else {
 			zero := reflect.Zero(rv.Type().Elem())
-			if b, ok := primitiveStrategy(h, zero); ok {
-				return b, true
-			} else if b, ok := mapStrategy(h, zero); ok {
-				return b, true
-			} else if b, ok := pointerStrategy(h, zero); ok {
-				return b, true
+			if primitiveStrategy(h, zero) {
+				return true
+			} else if mapStrategy(h, zero) {
+				return true
+			} else if pointerStrategy(h, zero) {
+				return true
 			}
-			return nil, false
+			return false
 		}
 	}
-	return nil, false
+	return false
 }
 
-func mapStrategy(h io.Writer, rv reflect.Value) ([]byte, bool) {
+func mapStrategy(h io.Writer, rv reflect.Value) bool {
 	if rv.Kind() == reflect.Map {
 		mk := rv.MapKeys()
 		kv := make(map[string]reflect.Value, len(mk))
@@ -93,23 +98,25 @@ func mapStrategy(h io.Writer, rv reflect.Value) ([]byte, bool) {
 				defaultStrategy,
 			}.apply(h, rv.MapIndex(kv[keys[idx]]))
 		}
-		return b.Bytes(), true
+		h.Write(b.Bytes())
+		return true
 	}
-	return nil, false
+	return false
 }
 
-func timeStructStrategy(h io.Writer, v reflect.Value) ([]byte, bool) {
+func timeStructStrategy(h io.Writer, v reflect.Value) bool {
 	if v.Kind() == reflect.Struct {
 		log.Debug().Msgf("%v", v)
 		if v.Type() == reflect.TypeOf(time.Time{}) {
 			s := v.Interface().(time.Time).Format(time.RFC3339Nano)
-			return []byte(s), true
+			h.Write([]byte(s))
+			return true
 		}
 	}
-	return nil, false
+	return false
 }
 
-func structStrategy(h io.Writer, v reflect.Value) ([]byte, bool) {
+func structStrategy(h io.Writer, v reflect.Value) bool {
 	if v.Kind() == reflect.Struct {
 		log.Debug().Msgf("%v", v)
 		kv := make(map[string]reflect.Value, v.NumField())
@@ -123,7 +130,6 @@ func structStrategy(h io.Writer, v reflect.Value) ([]byte, bool) {
 
 		keys := MapKeysAsSlice[string, reflect.Value](kv)
 		sort.Strings(keys)
-		b := bytes.Buffer{}
 		s := strategies{
 			primitiveStrategy,
 			pointerStrategy,
@@ -137,17 +143,17 @@ func structStrategy(h io.Writer, v reflect.Value) ([]byte, bool) {
 		for _, key := range keys {
 			value := kv[key]
 			log.Debug().Msg(key)
-			b.Write(s.apply(h, value))
+			s.apply(h, value)
 		}
-		return b.Bytes(), true
+		return true
 	}
-	return nil, false
+	return false
 }
 
-func interfaceStrategy(h io.Writer, rv reflect.Value) ([]byte, bool) {
+func interfaceStrategy(h io.Writer, rv reflect.Value) bool {
 	if rv.Kind() == reflect.Interface {
 		if !rv.CanInterface() {
-			return nil, false
+			return false
 		}
 		strategies{
 			primitiveStrategy,
@@ -160,10 +166,10 @@ func interfaceStrategy(h io.Writer, rv reflect.Value) ([]byte, bool) {
 			defaultStrategy,
 		}.apply(h, reflect.ValueOf(rv.Interface()))
 	}
-	return nil, false
+	return false
 }
 
-func arraySliceStrategy(h io.Writer, rv reflect.Value) ([]byte, bool) {
+func arraySliceStrategy(h io.Writer, rv reflect.Value) bool {
 	switch rv.Kind() {
 	case reflect.Array, reflect.Slice:
 		var b bytes.Buffer
@@ -179,17 +185,19 @@ func arraySliceStrategy(h io.Writer, rv reflect.Value) ([]byte, bool) {
 				defaultStrategy,
 			}.apply(h, rv)
 		}
-		return b.Bytes(), true
+		h.Write(b.Bytes())
+		return true
 	default:
-		return nil, false
+		return false
 	}
 }
 
-func defaultStrategy(h io.Writer, rv reflect.Value) ([]byte, bool) {
-	return rv.Bytes(), true
+func defaultStrategy(h io.Writer, rv reflect.Value) bool {
+	h.Write(rv.Bytes())
+	return true
 }
 
-type strategies []func(w io.Writer, rv reflect.Value) ([]byte, bool)
+type strategies []func(w io.Writer, rv reflect.Value) bool
 
 var identityStrategies = strategies{
 	primitiveStrategy,
@@ -202,24 +210,24 @@ var identityStrategies = strategies{
 	defaultStrategy,
 }
 
-func (is strategies) apply(h io.Writer, object any) []byte {
+func (is strategies) apply(h io.Writer, object any) bool {
 	for _, strategy := range is {
 		if reflect.TypeOf(object) == reflect.TypeOf(reflect.Value{}) {
-			if b, ok := strategy(h, object.(reflect.Value)); ok {
-				return b
+			if strategy(h, object.(reflect.Value)) {
+				return true
 			}
 		} else {
-			if b, ok := strategy(h, reflect.ValueOf(object)); ok {
-				return b
+			if strategy(h, reflect.ValueOf(object)) {
+				return true
 			}
 		}
 	}
-	return []byte{}
+	return false
 }
 
 func HashIdentity[T any](t T) string {
 	h := sha512.New()
-	i := identityStrategies.apply(h, t)
-	s := hex.EncodeToString(i)
+	identityStrategies.apply(h, t)
+	s := hex.EncodeToString(h.Sum(nil))
 	return s
 }

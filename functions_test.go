@@ -44,7 +44,7 @@ func TestHashIdentity(t *testing.T) {
 		{
 			name: "person exclude CreatedDate",
 			args: args[person]{t: me},
-			want: "313936372d31312d32375430303a30303a30302d30353a30306a6172726f644076657274696772617465642e636f6d",
+			want: "23d2c569889575cf9d3fc77c3e6b458a7c64e40f9f33adc6661c4f1b5a9c17cdea43120d0ee6f051dcb0d945e97b56db0e329bef4a305206c31d833d35a5c724",
 		},
 	}
 	for _, tt := range tests {
