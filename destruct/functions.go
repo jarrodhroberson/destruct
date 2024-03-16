@@ -5,6 +5,8 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"sort"
@@ -13,9 +15,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func MapKeysAsSlice[K comparable, V any](m map[K]V) []K {
+func mapKeysToSlice[K comparable, V any](m map[K]V) []K {
 	ks := make([]K, 0, len(m))
-	for k := range m {
+	for k, _ := range m {
 		ks = append(ks, k)
 	}
 	return ks
@@ -84,11 +86,11 @@ func mapStrategy(h io.Writer, rv reflect.Value) bool {
 		for _, k := range mk {
 			kv[k.String()] = k
 		}
-		keys := MapKeysAsSlice[string, reflect.Value](kv)
+		keys := mapKeysToSlice[string, reflect.Value](kv)
 		sort.Strings(keys)
 		b := bytes.Buffer{}
 		for idx := range keys {
-			strategies{
+			err := strategies{
 				primitiveStrategy,
 				pointerStrategy,
 				mapStrategy,
@@ -97,6 +99,9 @@ func mapStrategy(h io.Writer, rv reflect.Value) bool {
 				arraySliceStrategy,
 				defaultStrategy,
 			}.apply(h, rv.MapIndex(kv[keys[idx]]))
+			if err != nil {
+				return false
+			}
 		}
 		h.Write(b.Bytes())
 		return true
@@ -128,7 +133,7 @@ func structStrategy(h io.Writer, v reflect.Value) bool {
 			kv[t1.Type().Name()] = t1
 		}
 
-		keys := MapKeysAsSlice[string, reflect.Value](kv)
+		keys := mapKeysToSlice[string, reflect.Value](kv)
 		sort.Strings(keys)
 		s := strategies{
 			primitiveStrategy,
@@ -142,8 +147,10 @@ func structStrategy(h io.Writer, v reflect.Value) bool {
 		}
 		for _, key := range keys {
 			value := kv[key]
-			log.Debug().Msg(key)
-			s.apply(h, value)
+			err := s.apply(h, value)
+			if err != nil {
+				return false
+			}
 		}
 		return true
 	}
@@ -155,7 +162,7 @@ func interfaceStrategy(h io.Writer, rv reflect.Value) bool {
 		if !rv.CanInterface() {
 			return false
 		}
-		strategies{
+		err := strategies{
 			primitiveStrategy,
 			pointerStrategy,
 			mapStrategy,
@@ -165,6 +172,9 @@ func interfaceStrategy(h io.Writer, rv reflect.Value) bool {
 			arraySliceStrategy,
 			defaultStrategy,
 		}.apply(h, reflect.ValueOf(rv.Interface()))
+		if err != nil {
+			return false
+		}
 	}
 	return false
 }
@@ -174,7 +184,7 @@ func arraySliceStrategy(h io.Writer, rv reflect.Value) bool {
 	case reflect.Array, reflect.Slice:
 		var b bytes.Buffer
 		for i := 0; i < rv.Len(); i++ {
-			strategies{
+			err := strategies{
 				primitiveStrategy,
 				timeStructStrategy,
 				pointerStrategy,
@@ -184,6 +194,9 @@ func arraySliceStrategy(h io.Writer, rv reflect.Value) bool {
 				arraySliceStrategy,
 				defaultStrategy,
 			}.apply(h, rv)
+			if err != nil {
+				return false
+			}
 		}
 		h.Write(b.Bytes())
 		return true
@@ -210,24 +223,36 @@ var identityStrategies = strategies{
 	defaultStrategy,
 }
 
-func (is strategies) apply(h io.Writer, object any) bool {
+func (is strategies) apply(h io.Writer, object any) error {
 	for _, strategy := range is {
 		if reflect.TypeOf(object) == reflect.TypeOf(reflect.Value{}) {
 			if strategy(h, object.(reflect.Value)) {
-				return true
+				return nil
 			}
 		} else {
 			if strategy(h, reflect.ValueOf(object)) {
-				return true
+				return nil
 			}
 		}
 	}
-	return false
+	return errors.Join(unmatchedStrategyError, fmt.Errorf("%v", object))
 }
 
-func HashIdentity[T any](t T) string {
+func HashIdentity[T any](t T) (string, error) {
 	h := sha512.New()
-	identityStrategies.apply(h, t)
-	s := hex.EncodeToString(h.Sum(nil))
+	if err := identityStrategies.apply(h, t); err == nil {
+		s := hex.EncodeToString(h.Sum(nil))
+		return s, nil
+	} else {
+		return "", err
+	}
+}
+
+func MustHashIdentity[T any](t T) string {
+	s, err := HashIdentity(t)
+	if err != nil {
+		log.Error().Err(err).Msg(err.Error())
+		panic(err)
+	}
 	return s
 }
