@@ -1,7 +1,8 @@
 package destruct
 
 import (
-	"errors"
+	"github.com/joomcode/errorx"
 )
 
-var unmatchedStrategyError = errors.New("no strategy matched")
+var destructNamespace = errorx.NewNamespace("destruct")
+var UnmatchedStrategyError = errorx.NewType(destructNamespace, "no strategy matched")

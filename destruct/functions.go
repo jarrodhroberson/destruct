@@ -207,10 +207,10 @@ func arraySliceStrategy(h io.Writer, rv reflect.Value) bool {
 }
 
 func defaultStrategy(h io.Writer, rv reflect.Value) bool {
-	log.Debug().Msgf("using default strategy to write type: %s; value %v", rv.Type(), rv)
+	log.Warn().Msgf("unhandled type %v", rv.Type())
 	_, err := h.Write(rv.Bytes())
 	if err != nil {
-		err := errs.NotWrittenError.Wrap(err, "failed to write value %s", rv.String())
+		err = UnmatchedStrategyError.WrapWithNoMessage(errs.NotWrittenError.Wrap(err, "failed to write value %s", rv.String()))
 		log.Error().Err(err).Msg(err.Error())
 		return false
 	}
@@ -242,10 +242,16 @@ func (is strategies) apply(h io.Writer, object any) error {
 			}
 		}
 	}
-	return errors.Join(unmatchedStrategyError, fmt.Errorf("%v", object))
+	return errors.Join(UnmatchedStrategyError.NewWithNoMessage(), fmt.Errorf("%v", object))
 }
 
 func HashIdentity[T any](t T) (string, error) {
+	if reflect.ValueOf(t).IsNil() {
+		err := errs.MustNotBeNil.New("can not hash nil")
+		log.Error().Err(err).Msg(err.Error())
+		panic(err)
+	}
+
 	h := sha512.New()
 	if err := identityStrategies.apply(h, t); err == nil {
 		s := hex.EncodeToString(h.Sum(nil))
